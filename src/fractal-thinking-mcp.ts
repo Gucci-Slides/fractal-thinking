@@ -98,8 +98,13 @@ interface FractalAnalysis {
       type: string;               // Type of pattern identified
       occurrences: number;        // Number of times pattern appears
       scales: number[];           // Depths at which pattern appears
-      evolution: Array<{ depth: number; variation: string }>;
+      evolution: Array<{ 
+        depth: number; 
+        variation: string;
+        confidence: number;      // Confidence score for this evolution step
+      }>;
       crossBranchOccurrences: number;
+      confidence: number;        // Overall confidence score for the pattern
     }[];
     emergentProperties: {         // Properties that emerge from pattern interaction
       property: string;
@@ -133,6 +138,7 @@ interface CachedAnalysis {
   summary: string;
   key: string;
   fullAnalysis?: FractalAnalysis;
+  accessCount?: number;
 }
 
 interface AnalysisCache {
@@ -155,6 +161,28 @@ interface AggregateSummary {
 
 interface AggregateCache {
   [key: string]: AggregateSummary;
+}
+
+interface CacheConfig {
+  baseExpirationMs: number;
+  patternStrengthMultiplier: number;
+  depthMultiplier: number;
+  maxCacheSize: number;
+  minExpirationMs: number;
+  maxExpirationMs: number;
+}
+
+interface CacheStats {
+  hits: number;
+  misses: number;
+  evictions: number;
+  totalSize: number;
+}
+
+interface ThoughtChangeTracker {
+  lastModified: number;
+  subthoughtChanges: boolean;
+  lastAnalysis: number;
 }
 
 // Add before the FractalThinkingServer class
@@ -221,7 +249,8 @@ class AnalysisSummarizer {
             occurrences: parseInt(count?.slice(0, -1) || '0'),
             scales: [],
             evolution: [],
-            crossBranchOccurrences: 0
+            crossBranchOccurrences: 0,
+            confidence: 0  // Add default confidence
           };
         }),
         emergentProperties: parsedProperties.map(p => {
@@ -265,8 +294,76 @@ class FractalThinkingServer {
     createdAt: new Date().toISOString()
   }];
 
+  private cacheConfig: CacheConfig = {
+    baseExpirationMs: 5 * 60 * 1000,  // 5 minutes base
+    patternStrengthMultiplier: 2,     // Strong patterns cache longer
+    depthMultiplier: 1.5,             // Deeper thoughts cache longer
+    maxCacheSize: 1000,               // Maximum cache entries
+    minExpirationMs: 1 * 60 * 1000,   // 1 minute minimum
+    maxExpirationMs: 30 * 60 * 1000   // 30 minutes maximum
+  };
+
+  private cacheStats: CacheStats = {
+    hits: 0,
+    misses: 0,
+    evictions: 0,
+    totalSize: 0
+  };
+
   private analysisCache: AnalysisCache = {};
   private aggregateCache: AggregateCache = {};
+
+  // Add to existing properties
+  private changeTracker: Map<string, ThoughtChangeTracker> = new Map();
+
+  // Add new methods for change tracking
+  private trackThoughtChange(thoughtId: string, includeSubthoughts: boolean = false): void {
+    const now = Date.now();
+    const current = this.changeTracker.get(thoughtId) || {
+      lastModified: now,
+      subthoughtChanges: false,
+      lastAnalysis: 0
+    };
+    
+    current.lastModified = now;
+    if (includeSubthoughts) {
+      current.subthoughtChanges = true;
+    }
+    
+    this.changeTracker.set(thoughtId, current);
+    
+    // Propagate change notification up the tree
+    const thought = this.findThought(thoughtId);
+    if (thought && thought.parentId) {
+      const parentTracker = this.changeTracker.get(thought.parentId) || {
+        lastModified: now,
+        subthoughtChanges: true,
+        lastAnalysis: 0
+      };
+      parentTracker.subthoughtChanges = true;
+      this.changeTracker.set(thought.parentId, parentTracker);
+    }
+  }
+
+  private hasNodeChanged(node: FractalThought): boolean {
+    const tracker = this.changeTracker.get(node.thoughtId);
+    if (!tracker) return true; // No tracking info means treat as changed
+    
+    if (tracker.lastModified > tracker.lastAnalysis) return true;
+    if (tracker.subthoughtChanges) return true;
+    
+    return false;
+  }
+
+  private markAnalyzed(thoughtId: string): void {
+    const now = Date.now();
+    const tracker = this.changeTracker.get(thoughtId);
+    if (tracker) {
+      tracker.lastAnalysis = now;
+      tracker.subthoughtChanges = false;
+      this.changeTracker.set(thoughtId, tracker);
+    }
+  }
 
   // Find a thought by ID in the tree
   public findThought(id: string | null, nodes: FractalThought[] = this.thoughtTree): FractalThought | null {
@@ -323,7 +420,7 @@ class FractalThinkingServer {
   }
 
   // Add a new thought to the tree
-  addThought(params: Omit<FractalThought, 'subThoughts' | 'thoughtId' | 'createdAt' | 'depth'> & { 
+  public addThought(params: Omit<FractalThought, 'subThoughts' | 'thoughtId' | 'createdAt' | 'depth'> & { 
     thoughtId?: string; 
     createdAt?: string;
     depth?: number;
@@ -346,7 +443,6 @@ class FractalThinkingServer {
 
       const { thought, thoughtId, parentId, isComplete, needsDeeperAnalysis, createdAt } = validation.data;
       
-      // Find parent first
       const parent = this.findThought(parentId);
       if (parentId && !parent) {
         return {
@@ -355,7 +451,6 @@ class FractalThinkingServer {
         };
       }
 
-      // Calculate depth based on parent if not provided
       const depth = params.depth ?? (parent ? parent.depth + 1 : 0);
 
       const newThought: FractalThought = {
@@ -369,12 +464,14 @@ class FractalThinkingServer {
         subThoughts: []
       };
 
-      // Add to parent or root
       if (parent) {
         parent.subThoughts.push(newThought);
+        this.trackThoughtChange(parent.thoughtId, true);
       } else {
         this.thoughtTree.push(newThought);
       }
+      
+      this.trackThoughtChange(newThought.thoughtId);
 
       const thoughtContext = this.getThoughtWithContext(thoughtId);
       const context: ThoughtContext = {
@@ -387,7 +484,6 @@ class FractalThinkingServer {
       const thoughtAnalysis = this.analyzeDepth(thoughtId);
       const parentAnalysis = parentId ? this.analyzeDepth(parentId) : undefined;
 
-      // Generate aggregate summary for both the new thought and its parent
       const thoughtAggregate = this.generateAggregateSummary(thoughtId);
       if (parentId) {
         this.generateAggregateSummary(parentId);
@@ -444,7 +540,7 @@ class FractalThinkingServer {
       parentPattern?: string,
       siblingPatterns: Set<string> = new Set()
     ) => {
-      // Enhanced pattern types with variations
+      // Enhanced pattern types with more variations
       const patternTypes = [
         { 
           type: 'expansion', 
@@ -453,7 +549,9 @@ class FractalThinkingServer {
             { name: 'balanced', test: (t: FractalThought) => 
               t.subThoughts.length >= 2 && t.subThoughts.length <= 4 },
             { name: 'broad', test: (t: FractalThought) => 
-              t.subThoughts.length > 4 }
+              t.subThoughts.length > 4 },
+            { name: 'focused', test: (t: FractalThought) =>
+              t.subThoughts.length === 1 }
           ]
         },
         { 
@@ -463,7 +561,9 @@ class FractalThinkingServer {
             { name: 'terminal', test: (t: FractalThought) => 
               t.isComplete && t.subThoughts.length === 0 },
             { name: 'composite', test: (t: FractalThought) => 
-              t.isComplete && t.subThoughts.length > 0 }
+              t.isComplete && t.subThoughts.length > 0 },
+            { name: 'partial', test: (t: FractalThought) =>
+              t.isComplete && t.subThoughts.some(sub => !sub.isComplete) }
           ]
         },
         { 
@@ -473,7 +573,9 @@ class FractalThinkingServer {
             { name: 'active', test: (t: FractalThought) => 
               t.needsDeeperAnalysis && !t.isComplete },
             { name: 'refined', test: (t: FractalThought) => 
-              t.needsDeeperAnalysis && t.isComplete }
+              t.needsDeeperAnalysis && t.isComplete },
+            { name: 'cascading', test: (t: FractalThought) =>
+              t.needsDeeperAnalysis && t.subThoughts.every(sub => sub.needsDeeperAnalysis) }
           ]
         },
         { 
@@ -483,16 +585,65 @@ class FractalThinkingServer {
             { name: 'divergent', test: (t: FractalThought) => 
               t.subThoughts.some(sub => sub.subThoughts.length > 0) },
             { name: 'parallel', test: (t: FractalThought) => 
-              t.subThoughts.every(sub => sub.subThoughts.length === 0) }
+              t.subThoughts.every(sub => sub.subThoughts.length === 0) },
+            { name: 'hybrid', test: (t: FractalThought) =>
+              t.subThoughts.some(sub => sub.subThoughts.length === 0) &&
+              t.subThoughts.some(sub => sub.subThoughts.length > 0) }
+          ]
+        },
+        {
+          type: 'convergence',
+          test: (t: FractalThought) => 
+            t.subThoughts.length > 1 && 
+            t.subThoughts.some(sub => sub.isComplete) && 
+            t.subThoughts.some(sub => !sub.isComplete),
+          variations: [
+            { name: 'early', test: (t: FractalThought) =>
+              t.subThoughts.filter(sub => sub.isComplete).length > 
+              t.subThoughts.filter(sub => !sub.isComplete).length },
+            { name: 'late', test: (t: FractalThought) =>
+              t.subThoughts.filter(sub => !sub.isComplete).length >
+              t.subThoughts.filter(sub => sub.isComplete).length },
+            { name: 'balanced', test: (t: FractalThought) =>
+              t.subThoughts.filter(sub => sub.isComplete).length ===
+              t.subThoughts.filter(sub => !sub.isComplete).length }
+          ]
+        },
+        {
+          type: 'transformation',
+          test: (t: FractalThought) =>
+            t.subThoughts.length > 0 &&
+            t.subThoughts.every(sub => sub.needsDeeperAnalysis),
+          variations: [
+            { name: 'complete', test: (t: FractalThought) =>
+              t.isComplete && t.subThoughts.every(sub => sub.needsDeeperAnalysis) },
+            { name: 'partial', test: (t: FractalThought) =>
+              !t.isComplete && t.subThoughts.every(sub => sub.needsDeeperAnalysis) },
+            { name: 'mixed', test: (t: FractalThought) =>
+              t.subThoughts.some(sub => sub.isComplete) &&
+              t.subThoughts.every(sub => sub.needsDeeperAnalysis) }
           ]
         }
       ];
 
-      // Check each pattern type
+      // Enhanced pattern detection with confidence scoring
       patternTypes.forEach(({ type, test, variations }) => {
         if (test(thought)) {
           const variation = variations.find(v => v.test(thought))?.name || 'basic';
           const key = parentPattern ? `${parentPattern}->${type}` : type;
+          
+          // Calculate pattern confidence based on multiple factors
+          const confidenceFactors = {
+            depth: Math.min(1, thought.depth / 5),  // Deeper patterns are more significant
+            subthoughtRatio: thought.subThoughts.length > 0 ? 
+              Math.min(1, thought.subThoughts.length / 4) : 0,
+            completionStatus: thought.isComplete ? 1 : 0.5,
+            analysisNeed: thought.needsDeeperAnalysis ? 0.7 : 1
+          };
+          
+          const confidence = Object.values(confidenceFactors)
+            .reduce((acc, val) => acc + val, 0) / Object.keys(confidenceFactors).length;
+
           const existing = patterns.get(key) || { 
             occurrences: 0, 
             scales: new Set(),
@@ -502,9 +653,12 @@ class FractalThinkingServer {
 
           existing.occurrences++;
           existing.scales.add(thought.depth);
-          existing.evolution.push({ depth: thought.depth, variation });
+          existing.evolution.push({ 
+            depth: thought.depth, 
+            variation,
+            confidence  // Add confidence to evolution tracking
+          } as { depth: number; variation: string; confidence: number });
           
-          // Track cross-branch occurrences
           if (siblingPatterns.has(key)) {
             existing.crossBranchOccurrences++;
           }
@@ -514,8 +668,15 @@ class FractalThinkingServer {
         }
       });
 
-      // Analyze siblings together
+      // Analyze siblings with enhanced context
       const siblingSet = new Set<string>();
+      const siblingContext = {
+        totalSiblings: thought.subThoughts.length,
+        completedSiblings: thought.subThoughts.filter(t => t.isComplete).length,
+        averageDepth: thought.subThoughts.reduce((acc, t) => acc + t.depth, 0) / 
+          Math.max(1, thought.subThoughts.length)
+      };
+
       thought.subThoughts.forEach(sub => 
         analyzePatternRecursively(sub, 
           patterns.size > 0 ? Array.from(patterns.keys())[0] : undefined,
@@ -526,13 +687,23 @@ class FractalThinkingServer {
 
     analyzePatternRecursively(node);
 
-    return Array.from(patterns.entries()).map(([type, data]) => ({
-      type,
-      occurrences: data.occurrences,
-      scales: Array.from(data.scales),
-      evolution: data.evolution,
-      crossBranchOccurrences: data.crossBranchOccurrences
-    }));
+    // Enhanced pattern aggregation with confidence weighting
+    return Array.from(patterns.entries())
+      .map(([type, data]) => ({
+        type,
+        occurrences: data.occurrences,
+        scales: Array.from(data.scales),
+        evolution: data.evolution.map(e => ({
+          depth: e.depth,
+          variation: e.variation,
+          confidence: (e as { depth: number; variation: string; confidence?: number }).confidence ?? 0
+        })),
+        crossBranchOccurrences: data.crossBranchOccurrences,
+        confidence: data.evolution.reduce((acc, e) => 
+          acc + ((e as { depth: number; variation: string; confidence?: number }).confidence ?? 0), 0
+        ) / Math.max(1, data.evolution.length)  // Average confidence across all occurrences
+      }))
+      .sort((a, b) => b.confidence - a.confidence);  // Sort by confidence
   }
 
   private identifyEmergentProperties(
@@ -772,27 +943,142 @@ class FractalThinkingServer {
     };
   }
 
-  // Add after the existing private methods
+  // Add cache management methods
+  private getCacheExpiration(analysis: FractalAnalysis): number {
+    const patternFactor = 1 + (analysis.fractalMetrics.patternStrength * this.cacheConfig.patternStrengthMultiplier);
+    const depthFactor = 1 + (analysis.maxDepth * this.cacheConfig.depthMultiplier);
+    
+    // Calculate dynamic expiration
+    const expiration = this.cacheConfig.baseExpirationMs * patternFactor * depthFactor;
+    
+    // Clamp to min/max
+    return Math.min(
+      Math.max(expiration, this.cacheConfig.minExpirationMs),
+      this.cacheConfig.maxExpirationMs
+    );
+  }
+
+  private evictStaleEntries(): void {
+    const now = Date.now();
+    let evicted = 0;
+    
+    // Clean analysis cache
+    Object.entries(this.analysisCache).forEach(([key, entry]) => {
+      if (now - entry.timestamp > this.getCacheExpiration(entry.fullAnalysis!)) {
+        delete this.analysisCache[key];
+        evicted++;
+      }
+    });
+    
+    // Clean aggregate cache
+    Object.entries(this.aggregateCache).forEach(([key, entry]) => {
+      if (now - entry.timestamp > this.cacheConfig.maxExpirationMs) {
+        delete this.aggregateCache[key];
+        evicted++;
+      }
+    });
+    
+    if (evicted > 0) {
+      this.cacheStats.evictions += evicted;
+      this.cacheStats.totalSize = Object.keys(this.analysisCache).length + 
+        Object.keys(this.aggregateCache).length;
+    }
+  }
+
+  private evictLeastUsedEntries(count: number): void {
+    // Get all cache entries with their last access time
+    const entries = Object.entries(this.analysisCache)
+      .map(([key, value]) => ({
+        key,
+        lastAccess: value.timestamp,
+        isAnalysis: true
+      }))
+      .concat(Object.entries(this.aggregateCache)
+        .map(([key, value]) => ({
+          key,
+          lastAccess: value.timestamp,
+          isAnalysis: false
+        })));
+    
+    // Sort by last access time
+    entries.sort((a, b) => a.lastAccess - b.lastAccess);
+    
+    // Remove oldest entries
+    entries.slice(0, count).forEach(entry => {
+      if (entry.isAnalysis) {
+        delete this.analysisCache[entry.key];
+      } else {
+        delete this.aggregateCache[entry.key];
+      }
+      this.cacheStats.evictions++;
+    });
+    
+    this.cacheStats.totalSize = Object.keys(this.analysisCache).length + 
+      Object.keys(this.aggregateCache).length;
+  }
+
+  private manageCacheSize(): void {
+    const totalSize = Object.keys(this.analysisCache).length + 
+      Object.keys(this.aggregateCache).length;
+    
+    if (totalSize > this.cacheConfig.maxCacheSize) {
+      const excessEntries = totalSize - this.cacheConfig.maxCacheSize;
+      this.evictLeastUsedEntries(excessEntries + Math.ceil(this.cacheConfig.maxCacheSize * 0.1));
+    }
+  }
+
+  // Update existing cache methods
   private cacheAnalysis(thoughtId: string, analysis: FractalAnalysis): void {
+    // Manage cache size before adding new entry
+    this.manageCacheSize();
+    
     this.analysisCache[thoughtId] = {
       timestamp: Date.now(),
       summary: AnalysisSummarizer.summarizeAnalysis(analysis),
       key: thoughtId,
-      fullAnalysis: analysis
+      fullAnalysis: analysis,
+      accessCount: 0
     };
+    
+    this.cacheStats.totalSize = Object.keys(this.analysisCache).length + 
+      Object.keys(this.aggregateCache).length;
   }
 
   private getCachedAnalysis(thoughtId: string): FractalAnalysis | null {
     const cached = this.analysisCache[thoughtId];
-    if (!cached) return null;
-
-    // Cache expires after 5 minutes
-    if (Date.now() - cached.timestamp > 5 * 60 * 1000) {
-      delete this.analysisCache[thoughtId];
+    if (!cached) {
+      this.cacheStats.misses++;
       return null;
     }
 
+    const expiration = this.getCacheExpiration(cached.fullAnalysis!);
+    if (Date.now() - cached.timestamp > expiration) {
+      delete this.analysisCache[thoughtId];
+      this.cacheStats.misses++;
+      return null;
+    }
+
+    cached.accessCount = (cached.accessCount || 0) + 1;
+    cached.timestamp = Date.now();  // Update last access time
+    this.cacheStats.hits++;
     return cached.fullAnalysis || null;
+  }
+
+  public getCacheStats(): CacheStats {
+    return { ...this.cacheStats };
+  }
+
+  public getCacheConfig(): CacheConfig {
+    return { ...this.cacheConfig };
+  }
+
+  public updateCacheConfig(config: Partial<CacheConfig>): void {
+    this.cacheConfig = {
+      ...this.cacheConfig,
+      ...config
+    };
+    // Trigger cache cleanup with new config
+    this.evictStaleEntries();
   }
 
   public getCachedSummary(thoughtId: string): string | null {
@@ -808,11 +1094,58 @@ class FractalThinkingServer {
     return cached.summary;
   }
 
-  // Modify the analyzeDepth method to use caching
+  // Modify analyzeDepth to use incremental analysis
+  private analyzeNodeIncremental(
+    node: FractalThought,
+    previousAnalysis?: FractalAnalysis | null
+  ): {
+    maxDepth: number;
+    unresolvedCount: number;
+    totalCount: number;
+    hasUnresolvedWithDeeperAnalysis: boolean;
+  } {
+    // If node hasn't changed and we have previous analysis, reuse metrics
+    if (previousAnalysis && !this.hasNodeChanged(node)) {
+      return {
+        maxDepth: previousAnalysis.maxDepth,
+        unresolvedCount: previousAnalysis.unresolvedCount,
+        totalCount: previousAnalysis.totalCount,
+        hasUnresolvedWithDeeperAnalysis: previousAnalysis.needsAttention
+      };
+    }
+
+    let maxDepth = node.depth;
+    let unresolvedCount = node.isComplete ? 0 : 1;
+    let totalCount = 1;
+    let hasUnresolvedWithDeeperAnalysis = false;
+
+    node.subThoughts.forEach(sub => {
+      const subAnalysis = this.analyzeNodeIncremental(
+        sub,
+        this.getCachedAnalysis(sub.thoughtId)
+      );
+      
+      maxDepth = Math.max(maxDepth, subAnalysis.maxDepth);
+      unresolvedCount += subAnalysis.unresolvedCount;
+      totalCount += subAnalysis.totalCount;
+      hasUnresolvedWithDeeperAnalysis = hasUnresolvedWithDeeperAnalysis || 
+        subAnalysis.hasUnresolvedWithDeeperAnalysis;
+    });
+
+    return {
+      maxDepth,
+      unresolvedCount,
+      totalCount,
+      hasUnresolvedWithDeeperAnalysis
+    };
+  }
+
   analyzeDepth(thoughtId: string): FractalAnalysis {
     // Try to get from cache first
     const cached = this.getCachedAnalysis(thoughtId);
-    if (cached) return cached;
+    if (cached && !this.hasNodeChanged(this.findThought(thoughtId)!)) {
+      return cached;
+    }
 
     const thought = this.findThought(thoughtId);
     if (!thought) {
@@ -840,26 +1173,13 @@ class FractalThinkingServer {
       };
     }
 
-    let maxDepth = thought.depth;
-    let unresolvedCount = thought.isComplete ? 0 : 1;
-    let totalCount = 1;
-    let hasUnresolvedWithDeeperAnalysis = false;
-
-    const analyzeNode = (node: FractalThought) => {
-      maxDepth = Math.max(maxDepth, node.depth);
-      totalCount++;
-      
-      if (!node.isComplete) {
-        unresolvedCount++;
-        if (node.needsDeeperAnalysis) {
-          hasUnresolvedWithDeeperAnalysis = true;
-        }
-      }
-      
-      node.subThoughts.forEach(analyzeNode);
-    };
-
-    thought.subThoughts.forEach(analyzeNode);
+    // Use incremental analysis
+    const {
+      maxDepth,
+      unresolvedCount,
+      totalCount,
+      hasUnresolvedWithDeeperAnalysis
+    } = this.analyzeNodeIncremental(thought, cached);
     
     const completionRatio = (totalCount - unresolvedCount) / totalCount;
     
@@ -879,8 +1199,11 @@ class FractalThinkingServer {
     const emergentProperties = this.identifyEmergentProperties(thought, recursivePatterns);
     const patternStrength = this.calculatePatternStrength(thought, recursivePatterns, emergentProperties);
 
+    // Mark as analyzed
+    this.markAnalyzed(thoughtId);
+
     // Cache the result before returning
-    this.cacheAnalysis(thoughtId, {
+    const analysis = {
       maxDepth,
       unresolvedCount,
       totalCount,
@@ -896,8 +1219,9 @@ class FractalThinkingServer {
         emergentProperties
       },
       summary: this.generateFractalSummary(thought)
-    });
+    };
 
+    this.cacheAnalysis(thoughtId, analysis);
     return this.getCachedAnalysis(thoughtId)!;
   }
 
@@ -975,7 +1299,11 @@ class FractalThinkingServer {
 // Define tools
 const ADD_FRACTAL_THOUGHT_TOOL: Tool = {
   name: 'addFractalThought',
-  description: 'Add a new thought to the fractal tree and analyze its fractal patterns. The response includes a detailed fractal analysis showing recursive patterns, emergent properties, and guidance for fractal development.',
+  description: 'Add a new thought to the fractal tree and analyze its fractal patterns. IMPORTANT: This tool MUST be immediately followed by summarizeFractalAnalysis using the thoughtId from the response. Example workflow:\n' +
+    '1. Call addFractalThought\n' +
+    '2. Get thoughtId from response\n' +
+    '3. Immediately call summarizeFractalAnalysis with that thoughtId\n' +
+    'The response includes a detailed fractal analysis showing recursive patterns, emergent properties, and guidance for fractal development.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -1130,32 +1458,72 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Return a response focused on fractal analysis
+        // New streamlined response format
+        const analysis = result.analysis?.thought;
+        const significantPatterns = analysis?.fractalMetrics.recursivePatterns
+          .sort((a, b) => b.occurrences - a.occurrences)
+          .slice(0, 3)
+          .map(p => ({
+            type: p.type,
+            strength: p.occurrences / Math.max(1, p.scales.length),
+            evolution: p.evolution.map(e => e.variation)
+          }));
+
+        const keyEmergentProperties = analysis?.fractalMetrics.emergentProperties
+          .filter(p => p.strength > 0.4)
+          .map(p => ({
+            property: p.property,
+            strength: p.strength
+          }));
+
+        const recommendations = [];
+        if (analysis?.needsAttention) {
+          recommendations.push("Needs deeper analysis");
+        }
+        if ((analysis?.fractalMetrics.crossBranchSimilarity ?? 0) > 0.7) {
+          recommendations.push("Consider pattern consolidation");
+        }
+        if ((analysis?.fractalMetrics.patternStrength ?? 0) < 0.3) {
+          recommendations.push("Pattern strength low - consider restructuring");
+        }
+
         return {
           content: [{ 
             type: 'text', 
             text: JSON.stringify({
-              status: 'success',
-              message: 'Thought added and analyzed for fractal patterns',
-              fractalAnalysis: {
-                thoughtPattern: result.analysis?.thought.summary,
-                metrics: {
-                  recursivePatterns: result.analysis?.thought.fractalMetrics.recursivePatterns,
-                  emergentProperties: result.analysis?.thought.fractalMetrics.emergentProperties,
-                  patternStrength: result.analysis?.thought.fractalMetrics.patternStrength
-                },
-                parentContext: result.analysis?.parent ? {
-                  patterns: result.analysis.parent.fractalMetrics.recursivePatterns,
-                  emergentProperties: result.analysis.parent.fractalMetrics.emergentProperties
-                } : null
-              },
               thought: {
                 id: result.thought.thoughtId,
                 content: result.thought.thought,
-                parentId: result.thought.parentId,
-                depth: result.thought.depth
+                depth: result.thought.depth,
+                context: {
+                  parent_id: result.thought.parentId,
+                  siblings: result.context?.siblings.length || 0
+                }
               },
-              aggregateSummary: result.aggregateSummary
+              patterns: {
+                key_patterns: significantPatterns,
+                emergent_properties: keyEmergentProperties,
+                overall_strength: analysis?.fractalMetrics.patternStrength || 0
+              },
+              metrics: {
+                completion_ratio: analysis?.completionRatio || 0,
+                branching_factor: analysis?.fractalMetrics.branchingFactor || 0,
+                depth_consistency: analysis?.fractalMetrics.depthConsistency || 0
+              },
+              natural_language_summary: {
+                system: analysis?.summary.complexSystems,
+                patterns: analysis?.summary.patternIdentification,
+                forecast: analysis?.summary.forecasting
+              },
+              recommendations,
+              required_next_action: {
+                tool: "summarizeFractalAnalysis",
+                params: {
+                  thoughtId: result.thought.thoughtId,
+                  forceSummarize: true
+                },
+                reason: "IMPORTANT: You must call summarizeFractalAnalysis immediately after adding a thought to ensure proper caching and pattern analysis."
+              }
             }, null, 2)
           }]
         };
@@ -1181,27 +1549,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Return a response focused on fractal patterns
+        // Streamlined analysis response
+        const significantPatterns = analysis.fractalMetrics.recursivePatterns
+          .sort((a, b) => b.occurrences - a.occurrences)
+          .slice(0, 3);
+
         return {
           content: [{ 
             type: 'text', 
             text: JSON.stringify({
-              fractalAnalysis: {
-                summary: analysis.summary,
-                patterns: {
-                  recursive: analysis.fractalMetrics.recursivePatterns,
-                  emergent: analysis.fractalMetrics.emergentProperties
-                },
-                metrics: {
-                  branchingFactor: analysis.fractalMetrics.branchingFactor,
-                  depthConsistency: analysis.fractalMetrics.depthConsistency,
-                  patternStrength: analysis.fractalMetrics.patternStrength
-                },
-                completion: {
-                  ratio: analysis.completionRatio,
-                  status: analysis.status,
-                  needsAttention: analysis.needsAttention
-                }
+              patterns: {
+                key_patterns: significantPatterns.map(p => ({
+                  type: p.type,
+                  strength: p.occurrences / Math.max(1, p.scales.length),
+                  evolution: p.evolution.map(e => e.variation)
+                })),
+                emergent_properties: analysis.fractalMetrics.emergentProperties
+                  .filter(p => p.strength > 0.4)
+                  .map(p => ({
+                    property: p.property,
+                    strength: p.strength
+                  })),
+                overall_strength: analysis.fractalMetrics.patternStrength || 0
+              },
+              metrics: {
+                completion_ratio: analysis.completionRatio,
+                branching_factor: analysis.fractalMetrics.branchingFactor,
+                depth_consistency: analysis.fractalMetrics.depthConsistency,
+                cross_branch_similarity: analysis.fractalMetrics.crossBranchSimilarity || 0
+              },
+              insights: {
+                system_complexity: analysis.summary.complexSystems,
+                pattern_evolution: analysis.summary.patternIdentification,
+                future_trajectory: analysis.summary.forecasting,
+                innovation_potential: analysis.summary.innovation
+              },
+              status: {
+                completion: analysis.status,
+                needs_attention: analysis.needsAttention,
+                total_thoughts: analysis.totalCount,
+                unresolved_thoughts: analysis.unresolvedCount
               }
             }, null, 2)
           }]
@@ -1365,11 +1752,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               pattern: decompositionPattern,
               branches,
               usage: {
-                next: 'Use addFractalThought for each branch, setting appropriate parentId',
-                example: `addFractalThought({
-                  thought: "${branches[0].thought}",
-                  ...branches[0].suggestedParams
-                })`
+                next: 'For each branch, you MUST follow this exact sequence:',
+                steps: [
+                  '1. Call addFractalThought with the branch',
+                  '2. Immediately call summarizeFractalAnalysis with the returned thoughtId',
+                  '3. Proceed to the next branch only after completing both steps'
+                ],
+                example: `// Step 1: Add the thought
+addFractalThought({
+  thought: "${branches[0].thought}",
+  ...branches[0].suggestedParams
+})
+
+// Step 2: REQUIRED - Immediately summarize the thought using the ID from step 1
+summarizeFractalAnalysis({
+  thoughtId: "returned_id_from_step_1",
+  forceSummarize: true
+})`
               }
             }, null, 2)
           }]
