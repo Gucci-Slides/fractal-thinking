@@ -1,0 +1,138 @@
+[
+    {
+      "thoughtId": "root1",
+      "thought": "Climate change adaptation requires a comprehensive approach addressing technological, social, economic, and policy dimensions.",
+      "depth": 0,
+      "parentId": null,
+      "isComplete": false,
+      "needsDeeperAnalysis": false,
+      "createdAt": "2025-03-27T10:00:00.000Z",
+      "subThoughts": [
+        {
+          "thoughtId": "tech1",
+          "thought": "Technological solutions for climate adaptation must balance immediate impact with long-term sustainability.",
+          "depth": 1,
+          "parentId": "root1",
+          "isComplete": false,
+          "needsDeeperAnalysis": true,
+          "createdAt": "2025-03-27T10:05:00.000Z",
+          "subThoughts": [
+            {
+              "thoughtId": "tech1-1",
+              "thought": "Energy grid resilience technologies need to account for increased extreme weather events.",
+              "depth": 2,
+              "parentId": "tech1",
+              "isComplete": true,
+              "needsDeeperAnalysis": false,
+              "createdAt": "2025-03-27T10:10:00.000Z",
+              "subThoughts": [
+                {
+                  "thoughtId": "tech1-1-1",
+                  "thought": "Distributed energy resources like microgrids provide localized resilience during outages.",
+                  "depth": 3,
+                  "parentId": "tech1-1",
+                  "isComplete": true,
+                  "needsDeeperAnalysis": false,
+                  "createdAt": "2025-03-27T10:15:00.000Z",
+                  "subThoughts": []
+                },
+                {
+                  "thoughtId": "tech1-1-2",
+                  "thought": "AI-driven predictive maintenance can anticipate grid vulnerabilities before extreme weather events.",
+                  "depth": 3,
+                  "parentId": "tech1-1",
+                  "isComplete": false,
+                  "needsDeeperAnalysis": true,
+                  "createdAt": "2025-03-27T10:20:00.000Z",
+                  "subThoughts": []
+                }
+              ]
+            },
+            {
+              "thoughtId": "tech1-2",
+              "thought": "Water management technologies must adapt to changing precipitation patterns and sea level rise.",
+              "depth": 2,
+              "parentId": "tech1",
+              "isComplete": false,
+              "needsDeeperAnalysis": false,
+              "createdAt": "2025-03-27T10:25:00.000Z",
+              "subThoughts": []
+            }
+          ]
+        },
+        {
+          "thoughtId": "social1",
+          "thought": "Social dimensions of climate adaptation include education, behavior change, and community resilience building.",
+          "depth": 1,
+          "parentId": "root1",
+          "isComplete": false,
+          "needsDeeperAnalysis": false,
+          "createdAt": "2025-03-27T10:30:00.000Z",
+          "subThoughts": [
+            {
+              "thoughtId": "social1-1",
+              "thought": "Climate education must move beyond awareness to action-oriented knowledge.",
+              "depth": 2,
+              "parentId": "social1",
+              "isComplete": true,
+              "needsDeeperAnalysis": false,
+              "createdAt": "2025-03-27T10:35:00.000Z",
+              "subThoughts": []
+            },
+            {
+              "thoughtId": "social1-2",
+              "thought": "Community-based adaptation strategies should leverage local knowledge and practices.",
+              "depth": 2,
+              "parentId": "social1",
+              "isComplete": false,
+              "needsDeeperAnalysis": true,
+              "createdAt": "2025-03-27T10:40:00.000Z",
+              "subThoughts": [
+                {
+                  "thoughtId": "social1-2-1",
+                  "thought": "Indigenous knowledge systems often contain generations of climate adaptation strategies.",
+                  "depth": 3,
+                  "parentId": "social1-2",
+                  "isComplete": false,
+                  "needsDeeperAnalysis": false,
+                  "createdAt": "2025-03-27T10:45:00.000Z",
+                  "subThoughts": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "thoughtId": "econ1",
+          "thought": "Economic frameworks for climate adaptation must address both market mechanisms and equitable distribution of resources.",
+          "depth": 1,
+          "parentId": "root1",
+          "isComplete": false,
+          "needsDeeperAnalysis": false,
+          "createdAt": "2025-03-27T10:50:00.000Z",
+          "subThoughts": []
+        },
+        {
+          "thoughtId": "policy1",
+          "thought": "Policy approaches must balance immediate adaptation needs with long-term transformation of systems.",
+          "depth": 1,
+          "parentId": "root1",
+          "isComplete": false,
+          "needsDeeperAnalysis": false,
+          "createdAt": "2025-03-27T10:55:00.000Z",
+          "subThoughts": [
+            {
+              "thoughtId": "policy1-1",
+              "thought": "Multilevel governance frameworks can better integrate local, national, and international climate policies.",
+              "depth": 2,
+              "parentId": "policy1",
+              "isComplete": true,
+              "needsDeeperAnalysis": false,
+              "createdAt": "2025-03-27T11:00:00.000Z",
+              "subThoughts": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
