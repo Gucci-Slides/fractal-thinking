@@ -20,16 +20,23 @@ This MCP server provides:
 - **thoughts://thought/{thoughtId}** - Access a specific thought and its sub-thoughts
 
 ### Tools
-- **addFractalThought** - Add a new thought to the tree
-- **updateFractalThought** - Update an existing thought
-- **analyzeFractalDepth** - Analyze the depth and completeness of thoughts
-- **clearFractalTree** - Clear the entire fractal thought tree
-- **saveFractalTree** - Save the tree to a file
-- **loadFractalTree** - Load the tree from a file
+- **breakDownThought** - Decompose a thought into fractal branches using predefined patterns
+- **addFractalThought** - Add a new thought to the tree with fractal analysis
+- **summarizeFractalAnalysis** - Generate and cache compact summaries of thought analyses
+- **analyzeFractalDepth** - Perform detailed fractal pattern analysis
 
-### Prompts
-- **start-fractal-analysis** - Begin a fractal thinking process for a problem
-- **expand-fractal-thought** - Guide expansion of an existing thought
+### Analysis Features
+- Pattern Recognition: Identifies recursive patterns across different scales
+- Emergent Properties: Detects properties that emerge from pattern interactions
+- Caching System: Efficient storage and retrieval of analysis results
+- Summary Format: D{depth}|C{completion%}|P[patterns]|E[properties]|S{strength%}
+
+### Decomposition Patterns
+- Problem-Solution: Analysis, Design, Implementation, Validation
+- Concept-Implementation: Core Concept, Requirements, Strategy, Testing
+- Abstract-Concrete: Model, Examples, Edge Cases, Integration
+- System-Components: Overview, Components, Interactions, Boundaries
+- Custom: User-defined decomposition patterns
 
 ## Installation
 
@@ -85,6 +92,39 @@ For development and testing, you can use the MCP Inspector:
 npx @modelcontextprotocol/inspector node build/index.js
 ```
 
+### Required Workflow
+
+1. Break down initial thoughts:
+```typescript
+breakDownThought({
+  thought: "Your complex thought",
+  decompositionPattern: "system-components" // or other patterns
+})
+```
+
+2. Add and summarize thoughts (always paired):
+```typescript
+// First, add the thought
+addFractalThought({
+  thought: "Your thought",
+  isComplete: false,
+  needsDeeperAnalysis: true
+})
+
+// Immediately summarize using the returned ID
+summarizeFractalAnalysis({
+  thoughtId: "returned_id",
+  forceSummarize: true
+})
+```
+
+3. Optional deep analysis:
+```typescript
+analyzeFractalDepth({
+  thoughtId: "thought_id"
+})
+```
+
 ## Fractal Thought Structure
 
 Each thought in the fractal tree has the following structure:
@@ -102,15 +142,13 @@ interface FractalThought {
 }
 ```
 
-## Example Workflow
+## Analysis Caching
 
-1. Start a new fractal analysis with the `start-fractal-analysis` prompt
-2. Add a root thought using `addFractalThought`
-3. Expand the thought with `expand-fractal-thought` prompt 
-4. Add sub-thoughts with `addFractalThought` (setting the parentId)
-5. Analyze the fractal structure with `analyzeFractalDepth`
-6. Save your work with `saveFractalTree`
-7. Continue expanding and refining thoughts
+The server implements an efficient caching system:
+- Full analysis results are cached for 5 minutes
+- Summaries are cached for 30 minutes
+- Automatic cache cleanup for expired entries
+- Force regeneration available when needed
 
 ## License
 

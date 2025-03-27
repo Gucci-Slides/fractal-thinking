@@ -1,11 +1,71 @@
 #!/usr/bin/env node
 
+/*
+ * LLM Tool Usage Guide
+ * ===================
+ * 
+ * Required Tool Flow:
+ * 
+ * 1. Breaking Down Initial Thoughts
+ *    - Use breakDownThought to decompose complex thoughts
+ *    - Choose appropriate decomposition pattern
+ *    - Example:
+ *      breakDownThought({
+ *        thought: "Complex system design",
+ *        decompositionPattern: "system-components"
+ *      })
+ * 
+ * 2. Adding and Summarizing Thoughts (ALWAYS PAIRED)
+ *    - MUST follow this two-step process for each thought:
+ *      a) First, add the thought:
+ *         addFractalThought({
+ *           thought: "System component X",
+ *           isComplete: false,
+ *           needsDeeperAnalysis: true
+ *         })
+ *      b) Immediately after, summarize the thought using its ID from the response:
+ *         summarizeFractalAnalysis({
+ *           thoughtId: "returned_id_from_add",
+ *           forceSummarize: true
+ *         })
+ * 
+ * 3. Deep Analysis (Optional)
+ *    - Use analyzeFractalDepth when more detailed insights are needed
+ *    - Example:
+ *      analyzeFractalDepth({
+ *        thoughtId: "thought_id"
+ *      })
+ * 
+ * Common Patterns:
+ * 
+ * 1. Complete Thought Processing
+ *    breakDownThought -> (addFractalThought -> summarizeFractalAnalysis) for each branch
+ *    This ensures each thought is properly analyzed and cached
+ * 
+ * 2. Pattern Evolution
+ *    summarizeFractalAnalysis -> analyzeFractalDepth
+ *    When summary shows interesting patterns, get full analysis
+ * 
+ * 3. Comparative Analysis
+ *    summarizeFractalAnalysis(parent) -> summarizeFractalAnalysis(child)
+ *    Compare pattern evolution between related thoughts
+ * 
+ * IMPORTANT:
+ * - NEVER add a thought without immediately summarizing it
+ * - Use the thoughtId from addFractalThought response in the subsequent summarizeFractalAnalysis call
+ * - Set forceSummarize: true to ensure fresh analysis
+ */
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from '@modelcontextprotocol/sdk/types.js';
 import chalk from 'chalk';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import debug from 'debug';
+
+// Initialize debug logger
+const log = debug('mcp:fractal-thinking');
 
 // Enable debug logging
 process.env.DEBUG = 'mcp:*';
@@ -67,6 +127,116 @@ interface ThoughtContext {
   pathLength: number;
 }
 
+// Add cache interfaces after the existing interfaces
+interface CachedAnalysis {
+  timestamp: number;
+  summary: string;
+  key: string;
+  fullAnalysis?: FractalAnalysis;
+}
+
+interface AnalysisCache {
+  [key: string]: CachedAnalysis;
+}
+
+// Add after the AnalysisCache interface
+interface AggregateSummary {
+  thoughtId: string;
+  timestamp: number;
+  summary: string;
+  childSummaries: { [key: string]: string };
+  metrics: {
+    totalBranches: number;
+    averageDepth: number;
+    completionRate: number;
+    patternStrength: number;
+  };
+}
+
+interface AggregateCache {
+  [key: string]: AggregateSummary;
+}
+
+// Add before the FractalThinkingServer class
+class AnalysisSummarizer {
+  static summarizeAnalysis(analysis: FractalAnalysis): string {
+    if (!analysis || !analysis.fractalMetrics) {
+      return 'D0|C0%|P[]|E[]|S0%';
+    }
+
+    const { recursivePatterns = [], emergentProperties = [] } = analysis.fractalMetrics;
+    
+    const patterns = recursivePatterns
+      .slice(0, 2)
+      .map(p => `${p.type}(${p.occurrences})`)
+      .join(', ');
+    
+    const properties = emergentProperties
+      .slice(0, 2)
+      .map(p => `${p.property}(${(p.strength * 100).toFixed(0)}%)`)
+      .join(', ');
+
+    return [
+      `D${analysis.maxDepth || 0}`,
+      `C${((analysis.completionRatio || 0) * 100).toFixed(0)}%`,
+      `P[${patterns}]`,
+      `E[${properties}]`,
+      `S${((analysis.fractalMetrics.patternStrength || 0) * 100).toFixed(0)}%`
+    ].join('|');
+  }
+
+  static expandSummary(summary: string): Partial<FractalAnalysis> {
+    if (!summary || typeof summary !== 'string') {
+      return {
+        maxDepth: 0,
+        completionRatio: 0,
+        fractalMetrics: {
+          branchingFactor: 0,
+          depthConsistency: 0,
+          crossBranchSimilarity: 0,
+          patternStrength: 0,
+          recursivePatterns: [],
+          emergentProperties: []
+        }
+      };
+    }
+
+    const [depth, completion, patterns, properties, strength] = summary.split('|');
+    
+    const parsedPatterns = patterns?.slice(2, -1).split(',').filter(Boolean) || [];
+    const parsedProperties = properties?.slice(2, -1).split(',').filter(Boolean) || [];
+
+    return {
+      maxDepth: parseInt(depth?.slice(1) || '0'),
+      completionRatio: parseInt(completion?.slice(1) || '0') / 100,
+      fractalMetrics: {
+        branchingFactor: 0,
+        depthConsistency: 0,
+        crossBranchSimilarity: 0,
+        patternStrength: parseInt(strength?.slice(1) || '0') / 100,
+        recursivePatterns: parsedPatterns.map(p => {
+          const [type = '', count = '0'] = (p.split('(') || []);
+          return {
+            type: type.trim(),
+            occurrences: parseInt(count?.slice(0, -1) || '0'),
+            scales: [],
+            evolution: [],
+            crossBranchOccurrences: 0
+          };
+        }),
+        emergentProperties: parsedProperties.map(p => {
+          const [prop = '', strength = '0%'] = (p.split('(') || []);
+          return {
+            property: prop.trim(),
+            strength: parseInt(strength?.slice(0, -2) || '0') / 100,
+            relatedPatterns: []
+          };
+        })
+      }
+    };
+  }
+}
+
 // Zod schemas for validation
 const ThoughtSchema = z.object({
   thought: z.string().min(1),
@@ -94,6 +264,9 @@ class FractalThinkingServer {
     needsDeeperAnalysis: false,
     createdAt: new Date().toISOString()
   }];
+
+  private analysisCache: AnalysisCache = {};
+  private aggregateCache: AggregateCache = {};
 
   // Find a thought by ID in the tree
   public findThought(id: string | null, nodes: FractalThought[] = this.thoughtTree): FractalThought | null {
@@ -159,6 +332,7 @@ class FractalThinkingServer {
     thought?: FractalThought;
     context?: ThoughtContext;
     analysis?: FractalAnalysisResponse;
+    aggregateSummary?: AggregateSummary;
     message?: string;
   } {
     try {
@@ -213,6 +387,12 @@ class FractalThinkingServer {
       const thoughtAnalysis = this.analyzeDepth(thoughtId);
       const parentAnalysis = parentId ? this.analyzeDepth(parentId) : undefined;
 
+      // Generate aggregate summary for both the new thought and its parent
+      const thoughtAggregate = this.generateAggregateSummary(thoughtId);
+      if (parentId) {
+        this.generateAggregateSummary(parentId);
+      }
+
       return {
         success: true,
         thought: newThought,
@@ -220,7 +400,8 @@ class FractalThinkingServer {
         analysis: {
           thought: thoughtAnalysis,
           parent: parentAnalysis
-        }
+        },
+        aggregateSummary: thoughtAggregate
       };
     } catch (error) {
       return {
@@ -591,7 +772,48 @@ class FractalThinkingServer {
     };
   }
 
+  // Add after the existing private methods
+  private cacheAnalysis(thoughtId: string, analysis: FractalAnalysis): void {
+    this.analysisCache[thoughtId] = {
+      timestamp: Date.now(),
+      summary: AnalysisSummarizer.summarizeAnalysis(analysis),
+      key: thoughtId,
+      fullAnalysis: analysis
+    };
+  }
+
+  private getCachedAnalysis(thoughtId: string): FractalAnalysis | null {
+    const cached = this.analysisCache[thoughtId];
+    if (!cached) return null;
+
+    // Cache expires after 5 minutes
+    if (Date.now() - cached.timestamp > 5 * 60 * 1000) {
+      delete this.analysisCache[thoughtId];
+      return null;
+    }
+
+    return cached.fullAnalysis || null;
+  }
+
+  public getCachedSummary(thoughtId: string): string | null {
+    const cached = this.analysisCache[thoughtId];
+    if (!cached) return null;
+
+    // Summary cache expires after 30 minutes
+    if (Date.now() - cached.timestamp > 30 * 60 * 1000) {
+      delete this.analysisCache[thoughtId];
+      return null;
+    }
+
+    return cached.summary;
+  }
+
+  // Modify the analyzeDepth method to use caching
   analyzeDepth(thoughtId: string): FractalAnalysis {
+    // Try to get from cache first
+    const cached = this.getCachedAnalysis(thoughtId);
+    if (cached) return cached;
+
     const thought = this.findThought(thoughtId);
     if (!thought) {
       return {
@@ -657,7 +879,8 @@ class FractalThinkingServer {
     const emergentProperties = this.identifyEmergentProperties(thought, recursivePatterns);
     const patternStrength = this.calculatePatternStrength(thought, recursivePatterns, emergentProperties);
 
-    return {
+    // Cache the result before returning
+    this.cacheAnalysis(thoughtId, {
       maxDepth,
       unresolvedCount,
       totalCount,
@@ -673,7 +896,9 @@ class FractalThinkingServer {
         emergentProperties
       },
       summary: this.generateFractalSummary(thought)
-    };
+    });
+
+    return this.getCachedAnalysis(thoughtId)!;
   }
 
   // Get the entire tree
@@ -688,6 +913,62 @@ class FractalThinkingServer {
     node.subThoughts.forEach(subThought => {
       this.printTree(subThought, `${indent}│   `);
     });
+  }
+
+  // Add after getCachedSummary method
+  private generateAggregateSummary(thoughtId: string): AggregateSummary {
+    const thought = this.findThought(thoughtId);
+    if (!thought) {
+      throw new Error(`Thought not found: ${thoughtId}`);
+    }
+
+    const analysis = this.analyzeDepth(thoughtId);
+    const summary = AnalysisSummarizer.summarizeAnalysis(analysis);
+    
+    // Recursively get summaries of all children
+    const childSummaries: { [key: string]: string } = {};
+    const collectChildSummaries = (node: FractalThought) => {
+      node.subThoughts.forEach(child => {
+        const childSummary = this.getCachedSummary(child.thoughtId) || 
+          AnalysisSummarizer.summarizeAnalysis(this.analyzeDepth(child.thoughtId));
+        childSummaries[child.thoughtId] = childSummary;
+        collectChildSummaries(child);
+      });
+    };
+    collectChildSummaries(thought);
+
+    // Calculate aggregate metrics
+    const allNodes = [thought, ...Object.keys(childSummaries).map(id => this.findThought(id)!).filter(Boolean)];
+    const metrics = {
+      totalBranches: allNodes.length,
+      averageDepth: allNodes.reduce((sum, node) => sum + node.depth, 0) / allNodes.length,
+      completionRate: allNodes.filter(node => node.isComplete).length / allNodes.length,
+      patternStrength: analysis.fractalMetrics.patternStrength
+    };
+
+    const aggregateSummary: AggregateSummary = {
+      thoughtId,
+      timestamp: Date.now(),
+      summary,
+      childSummaries,
+      metrics
+    };
+
+    this.aggregateCache[thoughtId] = aggregateSummary;
+    return aggregateSummary;
+  }
+
+  public getAggregateSummary(thoughtId: string, forceRegenerate: boolean = false): AggregateSummary | null {
+    const cached = this.aggregateCache[thoughtId];
+    if (!forceRegenerate && cached && (Date.now() - cached.timestamp) < 30 * 60 * 1000) {
+      return cached;
+    }
+    try {
+      return this.generateAggregateSummary(thoughtId);
+    } catch (error) {
+      console.error('Error generating aggregate summary:', error);
+      return null;
+    }
   }
 }
 
@@ -743,6 +1024,58 @@ const ANALYZE_FRACTAL_DEPTH_TOOL: Tool = {
   }
 };
 
+// Add after ANALYZE_FRACTAL_DEPTH_TOOL
+const SUMMARIZE_FRACTAL_ANALYSIS_TOOL: Tool = {
+  name: 'summarizeFractalAnalysis',
+  description: 'Summarize and cache fractal analysis results for a thought. Returns a compact representation of the analysis that can be used to quickly understand the thought structure without loading the full analysis.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      thoughtId: { 
+        type: 'string',
+        description: 'The ID of the thought to summarize'
+      },
+      forceSummarize: {
+        type: 'boolean',
+        description: 'Whether to force a new summary even if one exists in cache'
+      }
+    },
+    required: ['thoughtId']
+  }
+};
+
+// Add after SUMMARIZE_FRACTAL_ANALYSIS_TOOL
+const BREAK_DOWN_THOUGHT_TOOL: Tool = {
+  name: 'breakDownThought',
+  description: 'Break down a thought into fractal branches based on common decomposition patterns. Returns branch suggestions that can be used with addFractalThought.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      thought: {
+        type: 'string',
+        description: 'The thought to break down into fractal branches'
+      },
+      decompositionPattern: {
+        type: 'string',
+        enum: ['problem-solution', 'concept-implementation', 'abstract-concrete', 'system-components', 'custom'],
+        description: 'The pattern to use for breaking down the thought'
+      },
+      customPattern: {
+        type: 'object',
+        description: 'Custom decomposition pattern (only used when decompositionPattern is "custom")',
+        properties: {
+          branchTypes: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Types of branches to create'
+          }
+        }
+      }
+    },
+    required: ['thought', 'decompositionPattern']
+  }
+};
+
 // Create server instance
 const fractalServer = new FractalThinkingServer();
 const transport = new StdioServerTransport();
@@ -761,11 +1094,16 @@ const server = new Server(
 
 // Register tool handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [ADD_FRACTAL_THOUGHT_TOOL, ANALYZE_FRACTAL_DEPTH_TOOL],
+  tools: [
+    ADD_FRACTAL_THOUGHT_TOOL,
+    BREAK_DOWN_THOUGHT_TOOL,
+    ANALYZE_FRACTAL_DEPTH_TOOL,
+    SUMMARIZE_FRACTAL_ANALYSIS_TOOL
+  ],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  console.error('Received tool request:', JSON.stringify(request.params, null, 2));
+  log('Received tool request:', JSON.stringify(request.params, null, 2));
   
   if (!request.params.arguments) {
     return {
@@ -778,13 +1116,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'addFractalThought': {
       try {
         const params = request.params.arguments as z.infer<typeof ThoughtSchema>;
-        console.error('Processing addFractalThought with params:', JSON.stringify(params, null, 2));
+        log('Processing addFractalThought with params:', JSON.stringify(params, null, 2));
         
         const result = fractalServer.addThought(params);
         if (!result.success || !result.thought) {
-          console.error('Failed to add thought:', result.message);
+          log('Failed to add thought:', result.message);
           return {
-            content: [{ type: 'text', text: result.message || 'Failed to add thought' }],
+            content: [{ 
+              type: 'text', 
+              text: result.message || 'Failed to add thought'
+            }],
             isError: true
           };
         }
@@ -813,12 +1154,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 content: result.thought.thought,
                 parentId: result.thought.parentId,
                 depth: result.thought.depth
-              }
+              },
+              aggregateSummary: result.aggregateSummary
             }, null, 2)
           }]
         };
       } catch (error) {
-        console.error('Error in addFractalThought:', error);
+        log('Error in addFractalThought:', error);
         return {
           content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
           isError: true
@@ -828,11 +1170,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'analyzeFractalDepth': {
       try {
         const { thoughtId } = request.params.arguments as { thoughtId: string };
-        console.error('Processing analyzeFractalDepth for thought:', thoughtId);
+        log('Processing analyzeFractalDepth for thought:', thoughtId);
         
         const analysis = fractalServer.analyzeDepth(thoughtId);
         if (!analysis) {
-          console.error('Analysis failed: Thought not found');
+          log('Analysis failed: Thought not found');
           return {
             content: [{ type: 'text', text: 'Thought not found' }],
             isError: true
@@ -865,7 +1207,175 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }]
         };
       } catch (error) {
-        console.error('Error in analyzeFractalDepth:', error);
+        log('Error in analyzeFractalDepth:', error);
+        return {
+          content: [{ type: 'text', text: String(error) }],
+          isError: true
+        };
+      }
+    }
+    case 'summarizeFractalAnalysis': {
+      try {
+        const { thoughtId, forceSummarize } = request.params.arguments as { 
+          thoughtId: string; 
+          forceSummarize?: boolean 
+        };
+        log('Processing summarizeFractalAnalysis for thought:', thoughtId);
+        
+        // Verify thought exists
+        const thought = fractalServer.findThought(thoughtId);
+        if (!thought) {
+          return {
+            content: [{ 
+              type: 'text', 
+              text: JSON.stringify({
+                status: 'error',
+                message: `Thought not found: ${thoughtId}`,
+                summary: AnalysisSummarizer.summarizeAnalysis(undefined as any)
+              }, null, 2)
+            }],
+            isError: true
+          };
+        }
+        
+        // Try to get cached summary first if not forcing
+        if (!forceSummarize) {
+          const cachedSummary = fractalServer.getCachedSummary(thoughtId);
+          if (cachedSummary) {
+            return {
+              content: [{ 
+                type: 'text', 
+                text: JSON.stringify({
+                  status: 'success',
+                  source: 'cache',
+                  summary: cachedSummary,
+                  expandedSummary: AnalysisSummarizer.expandSummary(cachedSummary)
+                }, null, 2)
+              }]
+            };
+          }
+        }
+
+        // Generate new summary
+        const analysis = fractalServer.analyzeDepth(thoughtId);
+        if (!analysis) {
+          return {
+            content: [{ 
+              type: 'text', 
+              text: JSON.stringify({
+                status: 'error',
+                message: 'Failed to analyze thought',
+                summary: AnalysisSummarizer.summarizeAnalysis(undefined as any)
+              }, null, 2)
+            }],
+            isError: true
+          };
+        }
+
+        const summary = AnalysisSummarizer.summarizeAnalysis(analysis);
+        
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify({
+              status: 'success',
+              source: 'fresh',
+              summary,
+              expandedSummary: AnalysisSummarizer.expandSummary(summary)
+            }, null, 2)
+          }]
+        };
+      } catch (error) {
+        log('Error in summarizeFractalAnalysis:', error);
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify({
+              status: 'error',
+              message: String(error),
+              summary: AnalysisSummarizer.summarizeAnalysis(undefined as any)
+            }, null, 2)
+          }],
+          isError: true
+        };
+      }
+    }
+    case 'breakDownThought': {
+      try {
+        const { thought, decompositionPattern, customPattern } = request.params.arguments as {
+          thought: string;
+          decompositionPattern: string;
+          customPattern?: { branchTypes: string[] };
+        };
+
+        // Define common decomposition patterns
+        const patterns = {
+          'problem-solution': [
+            { type: 'Problem Analysis', template: 'Analyze: ${thought}' },
+            { type: 'Solution Design', template: 'Design solution for: ${thought}' },
+            { type: 'Implementation', template: 'Implement: ${thought}' },
+            { type: 'Validation', template: 'Validate: ${thought}' }
+          ],
+          'concept-implementation': [
+            { type: 'Core Concept', template: 'Define: ${thought}' },
+            { type: 'Requirements', template: 'Requirements for: ${thought}' },
+            { type: 'Implementation Strategy', template: 'Strategy for: ${thought}' },
+            { type: 'Testing Approach', template: 'Test plan for: ${thought}' }
+          ],
+          'abstract-concrete': [
+            { type: 'Abstract Model', template: 'Model: ${thought}' },
+            { type: 'Concrete Examples', template: 'Examples of: ${thought}' },
+            { type: 'Edge Cases', template: 'Edge cases in: ${thought}' },
+            { type: 'Integration Points', template: 'Integration of: ${thought}' }
+          ],
+          'system-components': [
+            { type: 'System Overview', template: 'Overview: ${thought}' },
+            { type: 'Components', template: 'Components of: ${thought}' },
+            { type: 'Interactions', template: 'Interactions in: ${thought}' },
+            { type: 'Boundaries', template: 'Boundaries of: ${thought}' }
+          ]
+        };
+
+        // Select pattern or use custom
+        const selectedPattern = decompositionPattern === 'custom' && customPattern
+          ? customPattern.branchTypes.map(type => ({ type, template: `${type}: \${thought}` }))
+          : patterns[decompositionPattern as keyof typeof patterns];
+
+        if (!selectedPattern) {
+          throw new Error(`Invalid decomposition pattern: ${decompositionPattern}`);
+        }
+
+        // Generate branches
+        const branches = selectedPattern.map(({ type, template }) => ({
+          type,
+          thought: template.replace('${thought}', thought),
+          suggestedParams: {
+            isComplete: false,
+            needsDeeperAnalysis: true,
+            parentId: 'root' // Default to root, can be changed when adding
+          }
+        }));
+
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify({
+              status: 'success',
+              originalThought: thought,
+              pattern: decompositionPattern,
+              branches,
+              usage: {
+                next: 'Use addFractalThought for each branch, setting appropriate parentId',
+                example: `addFractalThought({
+                  thought: "${branches[0].thought}",
+                  ...branches[0].suggestedParams
+                })`
+              }
+            }, null, 2)
+          }]
+        };
+      } catch (error) {
+        log('Error in breakDownThought:', error);
         return {
           content: [{ type: 'text', text: String(error) }],
           isError: true
@@ -873,7 +1383,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
     default:
-      console.error('Unknown tool requested:', request.params.name);
+      log('Unknown tool requested:', request.params.name);
       return {
         content: [{ type: 'text', text: `Unknown tool: ${request.params.name}` }],
         isError: true
@@ -882,22 +1392,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 // Start the server
-console.log('Starting fractal thinking server...');
+log('Starting fractal thinking server...');
 server.connect(transport).then(() => {
-  console.log(chalk.green('Server connected and ready'));
+  log('Server connected and ready');
   
   // Keep the process alive and handle signals
   process.stdin.resume();
   process.on('SIGINT', () => {
-    console.log(chalk.yellow('\nReceived SIGINT, shutting down...'));
+    log('Received SIGINT, shutting down...');
     process.exit(0);
   });
   process.on('SIGTERM', () => {
-    console.log(chalk.yellow('\nReceived SIGTERM, shutting down...'));
+    log('Received SIGTERM, shutting down...');
     process.exit(0);
   });
 }).catch(error => {
-  console.error(chalk.red('Failed to start server:'), error);
+  log('Failed to start server:', error);
   process.exit(1);
 });
 

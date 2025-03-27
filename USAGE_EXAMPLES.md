@@ -2,153 +2,158 @@
 
 This document provides examples of how to use the Fractal Thinking MCP server with Claude.
 
-## Example 1: Starting a New Fractal Analysis
+## Example 1: Breaking Down a Complex Problem
 
-### Step 1: Initiate the analysis
+### Step 1: Initial Breakdown
 
-Ask Claude to start a new fractal analysis:
-
-```
-I want to use fractal thinking to analyze the problem of "improving online education engagement." Can you help me start a fractal analysis of this problem?
-```
-
-Claude will use the `start-fractal-analysis` prompt and guide you through creating the root thought.
-
-### Step 2: Create the root thought
-
-Claude will suggest creating a root thought using the `addFractalThought` tool:
+Ask Claude to break down a complex thought:
 
 ```
-Root Thought: "Improving online education engagement requires addressing multiple interconnected factors spanning technology, pedagogy, content design, and human motivation."
+I want to analyze "improving online education engagement" using fractal thinking. Can you help me break this down?
 ```
 
-### Step 3: Expand the root thought
+Claude will use the `breakDownThought` tool with an appropriate pattern:
 
-Ask Claude to help you expand this thought:
-
-```
-That's a good start. Can you help me expand this root thought into several fractal sub-thoughts?
-```
-
-Claude will use the `expand-fractal-thought` prompt and suggest several sub-thoughts to add.
-
-## Example 2: Analyzing an Existing Fractal Tree
-
-### Step 1: Analyze the tree
-
-Ask Claude to analyze the current fractal tree:
-
-```
-Can you analyze the fractal tree we've created so far? I'd like to know the depth and completeness.
+```typescript
+breakDownThought({
+  thought: "improving online education engagement",
+  decompositionPattern: "system-components"
+})
 ```
 
-Claude will use the `analyzeFractalDepth` tool and provide insights about:
-- Total number of thoughts
-- Maximum depth of the tree
-- Number of thoughts that need deeper analysis
-- Completion rate of the overall tree
+This will return suggested branches like:
+- System Overview: Understanding the online education ecosystem
+- Components: Key elements affecting engagement
+- Interactions: How different factors influence each other
+- Boundaries: Scope and limitations of improvements
 
-### Step 2: Focus on incomplete areas
+### Step 2: Adding and Analyzing Branches
 
-Based on the analysis, you can ask Claude to help you focus on the incomplete areas:
+For each branch, Claude will follow the required two-step process:
 
-```
-I see we have several incomplete thoughts. Let's focus on the "technology factors" branch. Can you help me expand that further?
-```
-
-Claude will help you identify the specific thought ID and expand it.
-
-### Step 3: Update thoughts as you progress
-
-As you make progress, update the completion status:
-
-```
-We've made good progress on understanding the technology factors. Can you mark the "Interactive tools for virtual classrooms" thought as complete?
+1. Add the thought:
+```typescript
+addFractalThought({
+  thought: "Understanding the online education ecosystem",
+  isComplete: false,
+  needsDeeperAnalysis: true,
+  parentId: "root"
+})
 ```
 
-Claude will use the `updateFractalThought` tool to update the status.
-
-## Example 3: Saving and Loading Your Work
-
-### Step 1: Save your current tree
-
-When you want to save your work for later:
-
-```
-Can you save our current fractal thought tree to a file called "education-engagement.json"?
+2. Immediately summarize it:
+```typescript
+summarizeFractalAnalysis({
+  thoughtId: "returned_id",
+  forceSummarize: true
+})
 ```
 
-Claude will use the `saveFractalTree` tool to persist your work.
+## Example 2: Pattern Evolution Analysis
 
-### Step 2: Load your previous work
-
-When you return to continue your analysis:
+### Step 1: Break Down Initial Concept
 
 ```
-I'd like to continue working on my education engagement analysis. Can you load the fractal tree from "education-engagement.json"?
+Let's analyze "AI-driven personalized learning" using the concept-implementation pattern.
 ```
 
-Claude will use the `loadFractalTree` tool to restore your previous session.
-
-## Example 4: Deep Fractal Analysis
-
-### Step 1: Identify a thought needing deeper analysis
-
-```
-The thought about "student motivation factors" needs deeper analysis. Can you mark it accordingly?
+Claude will use:
+```typescript
+breakDownThought({
+  thought: "AI-driven personalized learning",
+  decompositionPattern: "concept-implementation"
+})
 ```
 
-Claude will use `updateFractalThought` to flag this for deeper analysis.
+### Step 2: Systematic Branch Development
 
-### Step 2: Perform iterative refinement
+For each branch (Core Concept, Requirements, Strategy, Testing), Claude will:
 
-```
-Let's do a deeper analysis of the student motivation factors. Can you help me expand this in more detail?
-```
-
-Claude will help you add more sub-thoughts with increasing depth and specificity.
-
-### Step 3: Analyze the enriched structure
-
-```
-Now that we've expanded the motivation branch, can you analyze the entire tree again to see our progress?
+1. Add the thought with context:
+```typescript
+addFractalThought({
+  thought: "Core concept: AI adapting to individual learning patterns",
+  parentId: "root",
+  isComplete: false,
+  needsDeeperAnalysis: true
+})
 ```
 
-Claude will use `analyzeFractalDepth` to show how the fractal structure has evolved.
-
-## Example 5: Practical Application
-
-### Step 1: Create an action plan based on the fractal tree
-
-```
-Based on our fractal analysis of online education engagement, can you help me create an action plan that addresses the key insights we've discovered?
+2. Get immediate analysis:
+```typescript
+summarizeFractalAnalysis({
+  thoughtId: "new_thought_id",
+  forceSummarize: true
+})
 ```
 
-Claude can help you convert the fractal structure into practical next steps.
+### Step 3: Deep Pattern Analysis
 
-### Step 2: Prioritize actions based on the fractal structure
-
-```
-Looking at our fractal tree, which areas should we prioritize first for maximum impact on student engagement?
-```
-
-Claude can analyze the tree to identify high-leverage points.
-
-### Step 3: Identify connections across branches
-
-```
-Can you help me identify connections between the "technology" branch and the "pedagogy" branch in our fractal tree?
+For branches showing interesting patterns:
+```typescript
+analyzeFractalDepth({
+  thoughtId: "thought_id"
+})
 ```
 
-Claude can help you find cross-cutting themes and interdependencies in your fractal analysis.
+## Example 3: Using Custom Decomposition
 
-## Tips for Effective Fractal Thinking
+### Step 1: Define Custom Pattern
 
-1. **Start broad, then go deep**: Begin with general thoughts and iteratively add detail
-2. **Maintain self-similarity**: Each sub-thought should reflect the pattern of its parent
-3. **Look for connections**: Identify relationships between branches at the same depth
-4. **Balance breadth and depth**: Expand both horizontally (new branches) and vertically (deeper analysis)
-5. **Revisit incomplete thoughts**: Regularly analyze your tree to find gaps
-6. **Update completion status**: Mark thoughts as complete when sufficiently explored
-7. **Save regularly**: Persist your fractal tree to avoid losing insights of incomplete thoughts
-- Number
+```
+I want to analyze "sustainable urban development" using a custom pattern focusing on environmental, social, and economic aspects.
+```
+
+Claude will use:
+```typescript
+breakDownThought({
+  thought: "sustainable urban development",
+  decompositionPattern: "custom",
+  customPattern: {
+    branchTypes: [
+      "Environmental Impact",
+      "Social Integration",
+      "Economic Viability",
+      "Policy Framework"
+    ]
+  }
+})
+```
+
+### Step 2: Systematic Analysis
+
+For each custom branch, follow the standard process:
+1. Add thought
+2. Get immediate summary
+3. Analyze patterns if needed
+
+## Tips for Effective Usage
+
+1. **Always Follow the Two-Step Process**
+   - Never add a thought without immediately summarizing it
+   - Use `forceSummarize: true` for fresh analysis
+
+2. **Choose Appropriate Patterns**
+   - Problem-Solution: For concrete challenges
+   - Concept-Implementation: For new ideas
+   - Abstract-Concrete: For theoretical concepts
+   - System-Components: For complex systems
+   - Custom: For specialized domains
+
+3. **Leverage Caching**
+   - Summaries are cached for 30 minutes
+   - Full analyses are cached for 5 minutes
+   - Use `forceSummarize: true` when fresh analysis is needed
+
+4. **Pattern Analysis**
+   - Watch for emerging patterns in summaries
+   - Use deep analysis for promising branches
+   - Compare patterns across related thoughts
+
+5. **Summary Format Understanding**
+   Example: `D3|C80%|P[expansion(4), completion(2)]|E[Systematic(80%), Evolution(60%)]|S75%`
+   - D3: Depth of 3 levels
+   - C80%: 80% completion ratio
+   - P[...]: Top 2 patterns with occurrences
+   - E[...]: Top 2 emergent properties with strengths
+   - S75%: Overall pattern strength of 75%
